@@ -50,7 +50,55 @@ def multihead_attention(sess,queries,keys,num_units=None,num_heads=8,dropout_rat
         key_masks = tf.tile(key_masks,[num_heads,1])
         key_masks = tf.tile(tf.expand_dims(key_masks,1),[1,tf.shape(queries)])
         
+        paddings = tf.ones_like(outputs)*(-2**32+1)
+        outputs = tf.where(tf.equal(key_masks,0),paddings,outputs)
+        
+        
+        if causality:
+            diag_vals = tf.ones_like(outputs[0,:,:])
+            tril = tf.linalg.LinearOperatorLowerTriangular(diag_vals).to_dense()
+            masks = tf.tile(tf.expand_dims(tril,0),[tf.shape(outputs)[0],1,1])
+            
+            paddings = tf.ones_like(masks)*(-2**32+1)
+            outputs = tf.where(tf.equal(masks,0),paddings,outputs)
+        
+        outputs = tf.nn.softmax(outputs)
+        
+        
+        query_masks = tf.sign(tf.abs(tf.reduce_sum(queries,axis=1)))
+        query_masks = tf.tile(query_masks,[num_heads,1])
+        query_masks = tf.tile(tf.expand_dims(query_masks,-1),[1,1,tf.shape(keys)[1]])
+        
+        
+        outputs = tf.layers.dropout(outputs,rate=dropout_rate,training = tf.convert_to_tensor(is_training))
+        
+        outputs = tf.concat(tf.split(outputs,num_heads,axis=0),axis=2)
+        
+        outputs += queries
+        
+        outputs = normalize(outputs)
+        
         return outputs
+
+
+
+def feedforward(inputs,num_units=[2048,512],scope="multihead_attention",reuse=None):
+    params = {"inputs":inputs,"filters":num_units[0],"kernel_size":1,"activation":tf.nn.relu,"use_bias":True}
+    outputs = tf.layers.conv1d(**params)
+    
+    params = {"inputs":outputs,"filters":num_units[1],"kernel_size":1,"activation":tf.nn.relu,"use_bias":True}
+    
+    outputs = tf.layers.conv1d(**params)
+    
+    outputs += inputs
+    
+    outputs = normalize(outputs)
+    
+    return outputs
+
+def label_smoothing(inputs,epsilon=0.1):
+    K = inputs.get_shape().as_list()[-1]
+    return ((1-epsilon)*inputs) + (epsilon/K)
 
 if __name__=="__main__":
     query = tf.get_variable("query",initializer=tf.random_normal([2,3,1]))
